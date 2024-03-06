@@ -1,0 +1,177 @@
+Program.Sub.ScreenSU.Start
+Program.Sub.ScreenSU.End
+
+Program.Sub.Preflight.Start
+
+Variable.UDT.uWOs.Define("JOB",String,JOB)
+Variable.UDT.uWOs.Define("SUFFIX",String,SUFFIX)
+Variable.UDT.uWOs.Define("PARTNO",String,PARTNO)
+Variable.uGlobal.uWOs.Declare("uWOs")
+Variable.Global.sRptID.Declare(String)
+Program.Sub.Preflight.End
+
+Program.Sub.Main.Start
+F.Intrinsic.Control.SetErrorHandler("Main_Err")
+F.Intrinsic.Control.ClearErrors
+
+V.Local.sError.Declare(String)
+V.Local.bExists.Declare(Boolean)
+V.Local.sDSN.Declare(String)
+'Coded by SFF 12/15/2015
+'Print WOs individually with callwrapper when called from menu item, so the auto print of WO Docs will run for each WO in order.
+
+F.Intrinsic.Control.If(V.Caller.Hook,=,16090)
+	F.Intrinsic.Control.If(V.Passed.009001,=,"001811")
+		V.Global.sRptID.Set(V.Passed.009001)
+		'When called from Callwrapper, this will not try to fire again.
+		V.Passed.CANCEL.Set(1)
+		F.Intrinsic.String.Build("Global_{0}",V.Caller.CompanyCode,V.Local.sDSN)
+		'Connections
+		F.ODBC.Connection!con.OpenConnection(V.Ambient.PDSN,V.Ambient.PUser,V.Ambient.PPass)
+		'Get Data from BI_BAR_HEAD for current terminal
+		F.Intrinsic.Control.CallSub(Getwos)
+		'Print WOs one by one
+		F.Intrinsic.Control.If(V.uGlobal.uWOs.UBound,<>,-1)
+			F.Intrinsic.Control.CallSub(Printwos)
+		F.Intrinsic.Control.EndIf
+		
+		F.ODBC.Connection!con.Close
+	F.Intrinsic.Control.EndIf
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.Control.ExitSub
+
+F.Intrinsic.Control.Label("Main_Err")
+F.Intrinsic.Control.If(V.Ambient.ErrorNumber,<>,0)
+	Function.Intrinsic.String.Concat("Project: GCG_3285_WO_DOC_PRINT.gas",V.Ambient.Newline,V.Ambient.Newline,"Subroutine: ",V.Ambient.CurrentSubroutine,V.Ambient.NewLine,"Error Occurred ",V.Ambient.ErrorNumber," with description ",V.Ambient.ErrorDescription,V.Local.sError)
+	F.Intrinsic.UI.Msgbox(V.Local.sError)
+Function.Intrinsic.Control.EndIf
+Program.Sub.Main.End
+
+Program.Sub.GetWOs.Start
+F.Intrinsic.Control.SetErrorHandler("GetWOs_Err")
+F.Intrinsic.Control.ClearErrors
+
+V.Local.sError.Declare(String)
+V.Local.sSql.Declare(String)
+V.Local.i.Declare(Long)
+
+V.uGlobal.uWOs.Redim(-1,-1)
+
+F.Intrinsic.Variable.SetUDTFieldReference(V.uGlobal.uWOs!PARTNO,"")
+'Grab all work orders and load to UDT
+F.Intrinsic.String.Build("Select JOB,SUFFIX from v_BI_BAR_HEAD where TERMINAL = '{0}' ",V.Caller.Terminal,V.Local.sSql)
+F.ODBC.Connection!con.OpenRecordsetRO("rst",V.Local.sSql)
+F.Intrinsic.Control.If(V.ODBC.con!rst.EOF,<>,True)
+	F.Intrinsic.Variable.LoadUDTFromRecordset("con","rst","v.uGlobal.uWOs",False)
+F.Intrinsic.Control.EndIf
+F.ODBC.con!rst.Close
+
+F.Intrinsic.Control.For(V.Local.i,0,V.uGlobal.uWOs.UBound,1)
+	F.Intrinsic.String.Build("SELECT PART FROM V_JOB_HEADER WHERE JOB = '{0}' AND SUFFIX = '{1}'",V.uGlobal.uWOs(V.Local.i)!JOB,V.uGlobal.uWOs(V.Local.i)!SUFFIX,V.Local.sSql)
+	F.ODBC.Connection!con.OpenLocalRecordsetRO("rstPart",V.Local.sSql)
+
+	F.Intrinsic.Control.If(V.ODBC.con!rstPart.EOF,<>,True)
+		V.uGlobal.uWOs(V.Local.i)!PARTNO.Set(V.ODBC.con!rstPart.FieldValTrim!Part)
+	F.Intrinsic.Control.EndIf
+
+	F.ODBC.con!rstPart.Close
+F.Intrinsic.Control.Next(V.Local.i)
+
+F.Intrinsic.Variable.SetUDTFieldReference(V.uGlobal.uWOs!PARTNO,"PARTNO")
+
+F.Intrinsic.Control.ExitSub
+
+F.Intrinsic.Control.Label("GetWOs_Err")
+F.Intrinsic.Control.If(V.Ambient.ErrorNumber,<>,0)
+	Function.Intrinsic.String.Concat("Project: GCG_3285_WO_DOC_PRINT.gas",V.Ambient.Newline,V.Ambient.Newline,"Subroutine: ",V.Ambient.CurrentSubroutine,V.Ambient.NewLine,"Error Occurred ",V.Ambient.ErrorNumber," with description ",V.Ambient.ErrorDescription,V.Local.sError)
+	F.Intrinsic.UI.Msgbox(V.Local.sError)
+Function.Intrinsic.Control.EndIf
+Program.Sub.GetWOs.End
+
+Program.Sub.PrintWOs.Start
+F.Intrinsic.Control.SetErrorHandler("PrintWOs_Err")
+F.Intrinsic.Control.ClearErrors
+
+
+V.Local.sError.Declare(String)
+V.Local.i.Declare(Long)
+V.Local.sParams.Declare(String)
+V.Local.sParamValues.Declare(String)
+V.Local.sFilePath.Declare(String)
+V.Local.bMatl.Declare(Boolean)
+V.Local.bOut.Declare(Boolean)
+V.Local.bComment.Declare(Boolean)
+V.Local.sCallParam.Declare(String)
+
+F.Global.General.ReadOption("400725",0,False,V.Local.bMatl)
+F.Global.General.ReadOption("400727",0,False,V.Local.bOut)
+F.Global.General.ReadOption("400151",0,False,V.Local.bComment)
+
+F.Intrinsic.Control.For(V.Local.i,V.uGlobal.uWOs.LBound,V.uGlobal.uWOs.UBound,1)
+	'Print Each Job
+	F.Intrinsic.String.Build("{0}!*!{1}!*!{2}!*!False!*!BJ020LZ!*!001811!*!{3}",V.Caller.Terminal,V.Local.bMatl,V.Local.bOut,V.Local.bComment,V.Local.sParamValues)
+	F.Intrinsic.String.Split(V.Local.sParamValues,"!*!",V.Local.sParamValues)
+	F.Intrinsic.String.Split("Terminal*!*MATLBAR*!*OUTBAR*!*FGBAR*!*PROGRAM*!*REPORTID*!*COMMENTS","*!*",V.Local.sParams)
+	F.Intrinsic.String.Build("{0}!*!{1}!*!001811",V.uGlobal.uWOs(V.Local.i)!JOB,V.uGlobal.uWOs(V.Local.i)!SUFFIX,V.Local.sCallParam)
+	F.Global.General.CallWrapperSyncBIO(900100,V.Local.sCallParam)
+	F.Global.BI.PrintReport(V.Global.sRptID,8,V.Local.sParams,V.Local.sParamValues,True)
+	F.Intrinsic.Control.CallSub(PrintLink,"Part",V.uGlobal.uWOs(V.Local.i)!PARTNO.Trim)
+F.Intrinsic.Control.Next(V.Local.i)
+
+F.Intrinsic.Control.ExitSub
+
+F.Intrinsic.Control.Label("PrintWOs_Err")
+F.Intrinsic.Control.If(V.Ambient.ErrorNumber,<>,0)
+	Function.Intrinsic.String.Concat("Project: GCG_3285_WO_DOC_PRINT.gas",V.Ambient.Newline,V.Ambient.Newline,"Subroutine: ",V.Ambient.CurrentSubroutine,V.Ambient.NewLine,"Error Occurred ",V.Ambient.ErrorNumber," with description ",V.Ambient.ErrorDescription,V.Local.sError)
+	F.Intrinsic.UI.Msgbox(V.Local.sError)
+Function.Intrinsic.Control.EndIf
+Program.Sub.PrintWOs.End
+
+Program.Sub.PrintLink.Start
+V.Local.iLinkID.Declare(Long)
+V.Local.iDocID.Declare(Long)
+V.Local.iGrpID.Declare(Long)
+V.Local.sQuery.Declare(String)
+V.Local.stemp.Declare(String)
+V.Local.sPart.Declare(String)
+
+V.Local.sPart.Set(V.Args.Part)
+
+F.ODBC.Connection!con.OpenRecordsetRO("rstGrpID","SELECT GRP_ID FROM ATG_PRINT_DOC_GRP WHERE TYPE = 1 and PRINT_FLAG = 1")
+
+F.Global.DocumentControl.GetLinkID(V.Local.sPart,30,V.Local.iLinkID)
+F.Intrinsic.Control.If(V.Local.iLinkID,>,0)
+	
+	F.Intrinsic.Control.DoUntil(V.ODBC.con!rstGrpID.EOF,=,True)
+		F.Intrinsic.String.Concat("SELECT * FROM ATG_DOC_ASSOC WHERE LINK_ID = ",V.Local.iLinkID," AND GRP_ID = ",V.odbc.con!rstGrpID.FieldVal!Grp_ID,V.Local.sQuery)
+		F.ODBC.Connection!con.OpenRecordsetRO("rstDocID",V.Local.sQuery)
+
+		F.Intrinsic.Control.DoUntil(V.ODBC.con!rstDocID.EOF,=,True)
+			F.Intrinsic.String.Right(V.ODBC.con!rstDocID.FieldValTrim!PATH,1,V.Local.stemp)
+			F.Intrinsic.Control.If(V.Local.stemp,=,"\")
+				F.Intrinsic.String.Concat(V.ODBC.con!rstDocID.FieldValTrim!PATH,V.ODBC.con!rstDocID.FieldValTrim!FILE,V.Local.stemp)
+			F.Intrinsic.Control.Else
+				F.Intrinsic.String.Concat(V.ODBC.con!rstDocID.FieldValTrim!PATH,"\",V.ODBC.con!rstDocID.FieldValTrim!FILE,V.Local.stemp)
+			F.Intrinsic.Control.endif
+				F.Intrinsic.task.ShellExec(V.Caller.Handle,"PRINT",V.local.sTemp,"","",5)
+			F.ODBC.con!rstDocID.MoveNext
+		F.Intrinsic.control.loop
+		F.ODBC.con!rstDocID.Close
+		F.odbc.con!rstGrpID.MoveNext
+	F.Intrinsic.Control.Loop
+F.Intrinsic.Control.EndIf
+
+F.ODBC.con!rstgrpid.Close
+Program.Sub.PrintLink.End
+
+Program.Sub.Comments.Start
+${$0$}$GCG_3285_WO_DOC_PRINT$}$SFULSOM$}$12/16/2015$}$False
+${$1$}$$}$$}$0$}$16090$}$BI Hook$}$12/16/2015 7:48:16 AM$}$Override selection and print one by one.
+${$3$}$0$}$$}$-1$}$-1$}$$}$1/1/1900$}$on Hook 16090
+when report ID = 1811 barcode WO Extended
+Override when NOT called from Callwrapper
+Get all work orders from BI Bar Head and load to UDT
+print WOs individually and the other program Auto Print WO Docs will run for each WO Printed.
+
+Program.Sub.Comments.End
